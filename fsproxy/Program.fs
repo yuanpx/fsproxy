@@ -3,6 +3,10 @@ open System.Net;
 open System.Buffers.Binary;
 open System.IO;
 open System;
+open FSharp.Data;
+
+
+type Config = JsonProvider<"config.json">
 
 type Req1 = uint8 * uint8 * uint8[]
 type Req2 = uint8 * uint8 * uint8 *  uint8 * uint8[] * uint16 
@@ -37,8 +41,8 @@ let writeResp (stream: NetworkStream) (resp: RespType) =
                                                     let buf = Array.concat [| [|ver; rep; rsv; atyp|]; addr; port_buf|]
                                                     stream.AsyncWrite buf
 
-let listen (port: int32) = 
-    let localAddr = IPAddress.Parse("192.168.1.122") 
+let listen (host: string, port: int32) = 
+    let localAddr = IPAddress.Parse(host) 
     let server = new TcpListener(localAddr, port)
     server.Start();
     server
@@ -100,7 +104,9 @@ let rec startAccept (listener: TcpListener) (handle: NetworkStream -> Async<unit
         return! startAccept listener handle
     }
 
-let listener = listen(7788)
-let httpListener = listen(8989)
+let config = Config.GetSample()
+
+let listener = listen(config.SocksHost, config.SocksPort)
+let httpListener = listen(config.HttpHost, config.HttpPort)
 
 [startAccept(listener) handleStream; startAccept(httpListener) handleConnectStream] |> Async.Parallel |> Async.Ignore |> Async.RunSynchronously

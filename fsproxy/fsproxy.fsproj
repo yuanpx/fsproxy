@@ -6,7 +6,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Include="config.json" />
     <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup />
+
+  <ItemGroup>
+    <PackageReference Include="FSharp.Data" Version="5.0.2" />
   </ItemGroup>
 
 </Project>
