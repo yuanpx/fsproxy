@@ -45,27 +45,21 @@ let listen (host: string, port: int32) =
     server.Start();
     server
 
-let handleCopy(fromStream: NetworkStream) (toStream: NetworkStream) =
-    async {
-        let! res = fromStream.CopyToAsync(toStream) |> Async.AwaitTask |> Async.Catch
-        match res with
-        | Choice1Of2(v1) -> return ()
-        | Choice2Of2(v2) -> printf "%A" v2; return ()
-    }
+let handleProxyStream(aStream: NetworkStream) (bStream: NetworkStream) =
+        [ aStream.CopyToAsync(bStream) |> Async.AwaitTask; bStream.CopyToAsync(aStream) |> Async.AwaitTask] |> Async.Parallel |> Async.Ignore
 
-let handleStream (stream: NetworkStream) =
+let handleStream (socks: Socket) =
     async {
-        try 
+            use socks = socks
+            use stream = new NetworkStream(socks)
             let! (ver, nmethods, methods) = readReq1 stream
             do! writeResp stream (Resp1(ver, Array.head methods))
             let! (ver, cmd, rsv, atyp, addr, port) = readReq2 stream
-            let client = new TcpClient()
+            use client = new TcpClient()
             do! client.ConnectAsync(new IPAddress(addr), int port) |> Async.AwaitTask
             do! writeResp stream (Resp2(ver, uint8 0, rsv, atyp, addr, port))
             let serverStream = client.GetStream()
-            handleCopy stream serverStream |> Async.Start
-            handleCopy serverStream stream |> Async.Start
-        with ex -> printf "%A" ex
+            do! handleProxyStream stream serverStream |> Async.Catch |> Async.Ignore
     }
 
 let rec readerHeader(reader: StreamReader) = 
@@ -74,9 +68,11 @@ let rec readerHeader(reader: StreamReader) =
        if line = "" || line = "\r" then return [] else let! rest = readerHeader reader in  return line::rest
     }
 
-let handleConnectStream (stream: NetworkStream) =
+let handleConnectStream (socks: Socket) =
     async {
-       let reader = new StreamReader(stream)
+       use socks = socks
+       use stream = new NetworkStream(socks)
+       use reader = new StreamReader(stream)
        let! lines = readerHeader reader
        let line = List.head lines
        let parts = line.Split(" ")
@@ -84,21 +80,19 @@ let handleConnectStream (stream: NetworkStream) =
        let urlStr = parts[1]
        let ids =  urlStr.Split(":")
        let! hosts = Dns.GetHostAddressesAsync(ids[0], Sockets.AddressFamily.InterNetwork) |> Async.AwaitTask
-       let client = new TcpClient()
+       use client = new TcpClient()
        do! client.ConnectAsync(hosts[0], ids[1] |> int ) |> Async.AwaitTask
        let serverStream = client.GetStream()
        let resp = $"{parts[2]} 200 Connection Established\r\n\r\n"
        let resp_bytes = System.Text.Encoding.ASCII.GetBytes(resp)
        do! stream.AsyncWrite(resp_bytes)
-       handleCopy stream serverStream |> Async.Start
-       handleCopy serverStream stream |> Async.Start
+       do! handleProxyStream stream serverStream |> Async.Catch |> Async.Ignore
     }
 
-let rec startAccept (listener: TcpListener) (handle: NetworkStream -> Async<unit>) =
+let rec startAccept (listener: TcpListener) (handle: Socket -> Async<unit>) =
     async {
-        let! sock = listener.AcceptSocketAsync() |> Async.AwaitTask 
-        let stream = new NetworkStream(sock)
-        handle stream |> Async.Start
+        use! sock = listener.AcceptSocketAsync() |> Async.AwaitTask 
+        handle sock |> Async.Start
         return! startAccept listener handle
     }
 
