@@ -4,6 +4,10 @@ open System.Buffers.Binary;
 open System.IO;
 open FSharp.Data;
 
+type Cmd =
+    | StartSocks5 of string * int
+    | StartConnect of string * int
+
 type Config = JsonProvider<"config.json">
 
 type Req1 = uint8 * uint8 * uint8[]
@@ -99,9 +103,22 @@ let rec startAccept (listener: TcpListener) (handle: Socket -> Async<unit>) =
 exception ErrorConfiguration
 
 let config = Config.GetSample()
-let genProxy (config: Config.Root2) = match config.Type with
-                                        | "socks5" -> listen(config.Host, config.Port) |> (fun x -> startAccept x handleStream)
-                                        | "http" -> listen(config.Host, config.Port) |> (fun x -> startAccept x handleConnectStream)
-                                        | _ -> raise ErrorConfiguration
+let genProxyCmd (config: Config.Root2) = match config.Type with
+                                            | "socks5" -> StartSocks5(config.Host, config.Port)
+                                            | "http" -> StartConnect(config.Host, config.Port)
+                                            | _ -> raise ErrorConfiguration
 
-Array.map genProxy config.Root |> Async.Parallel |> Async.Ignore |> Async.RunSynchronously
+let proxyAgent = MailboxProcessor<Cmd>.Start(fun inbox ->
+    let rec loop () = async {
+        let! cmd = inbox.Receive()        
+        match cmd with
+        | StartSocks5(host, port) -> listen(host, port) |> (fun x -> startAccept x handleStream) |> Async.Ignore |> Async.Start
+        | StartConnect(host, port) -> listen(host, port) |> (fun x -> startAccept x handleConnectStream) |> Async.Ignore |> Async.Start
+        return! loop()
+    } 
+    loop ()
+)
+
+Array.map (fun x -> proxyAgent.Post(genProxyCmd x)) config.Root |> ignore
+
+System.Console.ReadKey()  |> ignore
