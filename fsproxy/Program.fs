@@ -2,9 +2,7 @@
 open System.Net;
 open System.Buffers.Binary;
 open System.IO;
-open System;
 open FSharp.Data;
-
 
 type Config = JsonProvider<"config.json">
 
@@ -104,9 +102,12 @@ let rec startAccept (listener: TcpListener) (handle: NetworkStream -> Async<unit
         return! startAccept listener handle
     }
 
+exception ErrorConfiguration
+
 let config = Config.GetSample()
+let genProxy (config: Config.Root2) = match config.Type with
+                                        | "socks5" -> listen(config.Host, config.Port) |> (fun x -> startAccept x handleStream)
+                                        | "http" -> listen(config.Host, config.Port) |> (fun x -> startAccept x handleConnectStream)
+                                        | _ -> raise ErrorConfiguration
 
-let listener = listen(config.SocksHost, config.SocksPort)
-let httpListener = listen(config.HttpHost, config.HttpPort)
-
-[startAccept(listener) handleStream; startAccept(httpListener) handleConnectStream] |> Async.Parallel |> Async.Ignore |> Async.RunSynchronously
+Array.map genProxy config.Root |> Async.Parallel |> Async.Ignore |> Async.RunSynchronously
